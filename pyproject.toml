@@ -1,0 +1,37 @@
+[tool.poetry]
+name = "project#2_avo_m25_555"
+version = "0.1.0"
+description = "Primitive console database application for FinTech learning project"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+packages = [
+    { include = "src" },
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+prompt = "^0.4.1"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.4.2"
+
+[tool.poetry.scripts]
+project = "src.primitive_db.main:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+exclude = [
+    ".venv",
+    "dist",
+    "__pycache__",
+    ".git",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = []

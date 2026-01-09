@@ -1,7 +1,5 @@
-"""project-2_avo_m25_555_src_primitive_db.__init__.py
-Пакет Primitive DB - консольная база данных на основе JSON-файлов."""
-
 from .engine import run
 from .main import main
+from .utils import ensure_data_dirs, load_metadata, save_metadata
 
-__all__ = ["main", "run"]
+__all__ = ["ensure_data_dirs", "load_metadata", "main", "run", "save_metadata"]

@@ -1,6 +1,7 @@
 """
 Константы для базы данных.
 """
+
 from pathlib import Path
 
 # Поддерживаемые типы данных
@@ -44,3 +45,31 @@ SUCCESS_ROW_INSERTED = 'Запись с ID={} успешно добавлена 
 TIME_FORMAT = "{:.3f}"
 ID_FORMAT = "ID:{}"
 
+# Синтаксис команд
+CREATE_TABLE_SYNTAX = "create_table <table> <col:type> ..."
+DROP_TABLE_SYNTAX = "drop_table <table>"
+LIST_TABLES_SYNTAX = "list_tables"
+INSERT_SYNTAX = "insert into <table> values (<val1>, <val2>, ...)"
+SELECT_SYNTAX = "select from <table> [where <condition>]"
+UPDATE_SYNTAX = "update <table> set <col>=<val> where <condition>"
+DELETE_SYNTAX = "delete from <table> where <condition>"
+INFO_SYNTAX = "info <table>"
+HELP_SYNTAX = "help"
+EXIT_SYNTAX = "exit"
+
+# Примеры команд
+CREATE_TABLE_EXAMPLE = "create_table users name:str age:int is_active:bool"
+INSERT_EXAMPLE = 'insert into users values ("John", 25, true)'
+SELECT_EXAMPLE = "select from users where age = 28"
+UPDATE_EXAMPLE = 'update users set age = 29 where name = "Sergei"'
+DELETE_EXAMPLE = "delete from users where ID = 1"
+
+# Операторы условий
+WHERE_OPERATORS = ["=", "!=", "<", ">", "<=", ">="]
+
+# Сообщения парсера
+ERROR_UNKNOWN_COMMAND = "Неизвестная команда: '{}'. Введите 'help' для справки."
+ERROR_INVALID_SYNTAX = "Неправильный синтаксис. Ожидалось: {}"
+ERROR_WRONG_ARG_COUNT = "Команда '{}' требует {} аргументов, получено {}."
+ERROR_VALUE_CONVERSION = "Невозможно преобразовать '{}' в тип {}"
+ERROR_CONDITION_SYNTAX = "Некорректный синтаксис условия: '{}'"

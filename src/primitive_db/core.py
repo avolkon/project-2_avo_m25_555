@@ -24,6 +24,221 @@ class TableNotFoundError(ValueError):
     """Исключение при обращении к несуществующей таблице."""
     pass
 
+class StorageError(Exception):
+    """Базовое исключение для ошибок хранилища."""
+    pass
+
+
+class MetadataStorage(ABC):
+    """Абстрактное хранилище метаданных БД."""
+    
+    @abstractmethod
+    def save(self, metadata: dict) -> bool:
+        """Сохраняет метаданные."""
+        pass
+    
+    @abstractmethod
+    def load(self) -> dict:
+        """Загружает метаданные."""
+        pass
+
+
+class TableDataStorage(ABC):
+    """Абстрактное хранилище данных таблиц."""
+    
+    @abstractmethod
+    def save(self, table_name: str, data: list) -> bool:
+        """Сохраняет данные таблицы."""
+        pass
+    
+    @abstractmethod
+    def load(self, table_name: str) -> list:
+        """Загружает данные таблицы."""
+        pass
+    
+    @abstractmethod
+    def exists(self, table_name: str) -> bool:
+        """Проверяет существование данных таблицы."""
+        pass
+
+
+class JsonMetadataStorage(MetadataStorage):
+    """JSON-хранилище метаданных с атомарными операциями."""
+    
+    def __init__(self, filepath: str = "db_meta.json"):
+        """
+        Инициализация JSON хранилища метаданных.
+        
+        Args:
+            filepath: Путь к файлу метаданных
+        """
+        self.filepath = Path(filepath)
+        self._ensure_directory()
+    
+    def _ensure_directory(self) -> None:
+        """Создает директорию для файла если её нет."""
+        self.filepath.parent.mkdir(parents=True, exist_ok=True)
+    
+    def save(self, metadata: dict) -> bool:
+        """Атомарно сохраняет метаданные."""
+        temp_file = self.filepath.with_suffix('.tmp')
+        
+        try:
+            # Создаем временный файл с данными
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2, ensure_ascii=False)
+            
+            # Атомарная замена старого файла новым
+            temp_file.replace(self.filepath)
+            return True
+            
+        except Exception as e:
+            # Удаляем временный файл при ошибке
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except OSError:
+                    pass  # Игнорируем ошибки удаления
+            raise StorageError(f"Ошибка сохранения метаданных: {e}")
+    
+    def load(self) -> dict:
+        """Загружает метаданные, возвращает {} если файла нет."""
+        if not self.filepath.exists():
+            return {}
+        
+        try:
+            with open(self.filepath, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            # Логируем ошибку но возвращаем пустой словарь
+            print(f"⚠️ Предупреждение: Ошибка чтения JSON {self.filepath}: {e}")
+            return {}
+        except Exception as e:
+            raise StorageError(f"Ошибка загрузки метаданных: {e}")
+
+
+class CachedJsonTableStorage(TableDataStorage):
+    """JSON-хранилище данных таблиц с кэшированием."""
+    
+    def __init__(self, tables_dir: str = "data/tables", cache_ttl: int = 300):
+        """
+        Инициализация кэширующего хранилища таблиц.
+        
+        Args:
+            tables_dir: Директория для файлов таблиц
+            cache_ttl: Время жизни кэша в секундах
+        """
+        self.tables_dir = Path(tables_dir)
+        self.cache_ttl = cache_ttl
+        self._cache: Dict[str, tuple] = {}
+        self._ensure_directory()
+    
+    def _ensure_directory(self) -> None:
+        """Создает директорию для таблиц если её нет."""
+        self.tables_dir.mkdir(parents=True, exist_ok=True)
+    
+    def _get_cache_key(self, table_name: str) -> str:
+        """Генерирует ключ кэша для таблицы."""
+        return f"table_{table_name}"
+    
+    def _is_cache_valid(self, cache_key: str) -> bool:
+        """
+        Проверяет валидность кэша по времени.
+        
+        Returns:
+            True если кэш валиден, False если устарел или отсутствует
+        """
+        if cache_key not in self._cache:
+            return False
+        
+        _, timestamp = self._cache[cache_key]
+        return time.time() - timestamp < self.cache_ttl
+    
+    def load(self, table_name: str) -> list:
+        """Загружает данные таблицы с использованием кэша."""
+        cache_key = self._get_cache_key(table_name)
+        
+        # Проверяем валидный кэш
+        if cache_key in self._cache and self._is_cache_valid(cache_key):
+            data, _ = self._cache[cache_key]
+            return data.copy()  # Возвращаем копию для безопасности
+        
+        # Загрузка из файла
+        filepath = self.tables_dir / f"{table_name}.json"
+        if not filepath.exists():
+            return []
+        
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"⚠️ Предупреждение: Ошибка чтения таблицы {table_name}: {e}")
+            data = []
+        except Exception as e:
+            raise StorageError(f"Ошибка загрузки таблицы {table_name}: {e}")
+        
+        # Сохраняем в кэш
+        self._cache[cache_key] = (data.copy(), time.time())
+        return data
+    
+    def save(self, table_name: str, data: list) -> bool:
+        """Сохраняет данные таблицы и инвалидирует кэш."""
+        filepath = self.tables_dir / f"{table_name}.json"
+        temp_file = filepath.with_suffix('.tmp')
+        
+        # Инициализируем backup_data перед блоком try
+        backup_data = None
+        
+        try:
+            # Создаем резервную копию существующих данных
+            if filepath.exists():
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        backup_data = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    backup_data = []  # Если файл поврежден
+            
+            # Сохраняем во временный файл
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            
+            # Атомарная замена файла
+            temp_file.replace(filepath)
+            
+            # Инвалидируем кэш
+            cache_key = self._get_cache_key(table_name)
+            if cache_key in self._cache:
+                del self._cache[cache_key]
+            
+            return True
+            
+        except Exception as e:
+            # Восстанавливаем из резервной копии при ошибке
+            if backup_data is not None and filepath.exists():
+                try:
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        json.dump(backup_data, f, indent=2, ensure_ascii=False)
+                except Exception:
+                    pass  # Игнорируем ошибки восстановления
+            
+            # Удаляем временный файл
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except OSError:
+                    pass
+            
+            raise StorageError(f"Ошибка сохранения таблицы {table_name}: {e}")
+    
+    def exists(self, table_name: str) -> bool:
+        """Проверяет существование файла таблицы."""
+        filepath = self.tables_dir / f"{table_name}.json"
+        return filepath.exists()
+    
+    def clear_cache(self) -> None:
+        """Очищает весь кэш."""
+        self._cache.clear()
+
 
 # Константы для типов данных
 SUPPORTED_TYPES = {"int": int, "str": str, "bool": bool}
@@ -261,18 +476,28 @@ class Database:
         Инициализация базы данных.
 
         Args:
-            metadata_storage: Хранилище метаданных (будет реализовано позже)
-            data_storage: Хранилище данных таблиц (будет реализовано позже)
+            metadata_storage: Хранилище метаданных (по умолчанию JsonMetadataStorage)
+            data_storage: Хранилище данных таблиц (по умолчанию CachedJsonTableStorage)
         """
-        self.metadata_storage = metadata_storage
-        self.data_storage = data_storage
+        self.metadata_storage = metadata_storage or JsonMetadataStorage()
+        self.data_storage = data_storage or CachedJsonTableStorage()
         self.tables: Dict[str, Table] = {}
-        self._load_initial_data()
+        self._load_metadata()    
     
-    def _load_initial_data(self) -> None:
-        """Загружает начальные данные при инициализации."""
-        # Временная заглушка - будет заменена при реализации хранилищ
-        self.tables = {}
+    def _load_metadata(self) -> None:
+        """Загружает метаданные из хранилища."""
+        try:
+            metadata = self.metadata_storage.load()
+            
+            if "tables" in metadata:
+                for table_name, table_data in metadata["tables"].items():
+                    try:
+                        table = Table.from_dict(table_name, table_data)
+                        self.tables[table_name] = table
+                    except Exception as e:
+                        print(f"⚠️ Ошибка загрузки таблицы {table_name}: {e}")
+        except Exception as e:
+            print(f"⚠️ Ошибка загрузки метаданных: {e}")
     
     def create_table(self, name: str, columns: List[Column]) -> Table:
         """
@@ -345,20 +570,22 @@ class Database:
         """Возвращает список имен всех таблиц."""
         return list(self.tables.keys())
     
-    def _save_metadata(self) -> None:
-        """Сохраняет метаданные базы данных."""
-        # TODO: Будет реализовано при интеграции хранилищ
-        metadata = {
-            "tables": {
-                name: table.to_dict()
-                for name, table in self.tables.items()
+    def _save_metadata(self) -> bool:
+        """Сохраняет метаданные в хранилище."""
+        try:
+            metadata = {
+                "tables": {
+                    name: table.to_dict()
+                    for name, table in self.tables.items()
+                }
             }
-        }
-        if self.metadata_storage:
-            # Здесь будет вызов метода save хранилища
-            pass
+            return self.metadata_storage.save(metadata)
+        except Exception as e:
+            print(f"❌ Ошибка сохранения метаданных: {e}")
+            return False
     
     def __repr__(self) -> str:
         tables_count = len(self.tables)
         return f"Database(tables={tables_count})"
+    
     

@@ -13,7 +13,20 @@ DEFAULT_ID_COLUMN_TYPE = "int"
 # Пути к файлам
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
+TABLES_DIR = DATA_DIR / "tables"
 META_FILE = DATA_DIR / "db_meta.json"
+
+# Настройки хранилищ
+DEFAULT_CACHE_TTL = 300  # 5 минут
+DEFAULT_META_PATH = "db_meta.json"
+DEFAULT_TABLES_DIR = "data/tables"
+
+# Сообщения хранилищ
+ERROR_STORAGE_SAVE = "Ошибка сохранения данных: {}"
+ERROR_STORAGE_LOAD = "Ошибка загрузки данных: {}"
+WARNING_JSON_ERROR = "Предупреждение: Ошибка чтения JSON {}: {}"
+INFO_CACHE_HIT = "📊 Кэш-попадание для ключа: {}"
+INFO_CACHE_MISS = "📊 Кэш-промах для ключа: {}"
 
 # Сообщения об ошибках
 ERROR_TABLE_EXISTS = "Таблица '{}' уже существует."

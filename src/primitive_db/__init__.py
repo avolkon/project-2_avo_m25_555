@@ -19,7 +19,12 @@ from .core import (
     Row,
     InvalidDataTypeError,
     TableAlreadyExistsError,
-    TableNotFoundError
+    TableNotFoundError,
+    StorageError,
+    MetadataStorage,
+    TableDataStorage,
+    JsonMetadataStorage,
+    CachedJsonTableStorage
 )
 
 __all__ = [
@@ -29,7 +34,12 @@ __all__ = [
     'Row',
     'InvalidDataTypeError',
     'TableAlreadyExistsError',
-    'TableNotFoundError'
+    'TableNotFoundError',
+    'StorageError',
+    'MetadataStorage',
+    'TableDataStorage',
+    'JsonMetadataStorage',
+    'CachedJsonTableStorage'
 ]
 
 __version__ = '0.1.0'

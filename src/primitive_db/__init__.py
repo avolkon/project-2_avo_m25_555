@@ -33,10 +33,8 @@ from .core import (
     TableAlreadyExistsError,
     TableDataStorage,
     TableNotFoundError,
-    confirm_action,
-    handle_db_errors,
-    log_time,
 )
+from .decorators import confirm_action, create_cacher, handle_db_errors, log_time
 from .parser import (
     CommandParser,
     ConditionParser,
@@ -81,6 +79,7 @@ __all__ = [
     "handle_db_errors",
     "confirm_action",
     "log_time",
+    "create_cacher",
 ]
 
 __version__ = "0.1.0"

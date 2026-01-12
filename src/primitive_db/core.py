@@ -3,12 +3,30 @@
 Содержит базовые классы моделей: Column, Row, Table, Database.
 """
 
+from __future__ import annotations
+
 import json
 import time
 from abc import ABC, abstractmethod
-from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
+# Импортируем декораторы из нового модуля
+try:
+    from .decorators import confirm_action, handle_db_errors, log_time
+except ImportError:
+    # Fallback для случаев когда decorators.py еще не создан
+
+    def handle_db_errors(func):
+        return func
+
+    def confirm_action(action_name):
+        def decorator(func):
+            return func
+        return decorator
+
+    def log_time(func):
+        return func
 
 
 class InvalidDataTypeError(ValueError):
@@ -317,118 +335,6 @@ class Command(ABC):
             return 0.0
         self.end_time = time.monotonic()
         return self.end_time - self.start_time
-
-
-# Декораторы для команд
-def handle_db_errors(func: Callable) -> Callable:
-    """
-    Декоратор для обработки ошибок базы данных.
-
-    Перехватывает стандартные исключения БД и преобразует их
-    в CommandResult с сообщением об ошибке.
-    """
-
-    @wraps(func)
-    def wrapper(self, *args, **kwargs) -> CommandResult:
-        try:
-            return func(self, *args, **kwargs)
-        except (
-            InvalidDataTypeError,
-            TableAlreadyExistsError,
-            TableNotFoundError,
-            StorageError,
-            ParseError,
-        ) as e:
-            # Известные ошибки БД
-            execution_time = self._stop_timer() if hasattr(self, "_stop_timer") else 0.0
-            return CommandResult(
-                success=False, message=str(e), execution_time=execution_time
-            )
-        except Exception as e:
-            # Неизвестные ошибки
-            execution_time = self._stop_timer() if hasattr(self, "_stop_timer") else 0.0
-            return CommandResult(
-                success=False,
-                message=f"Неизвестная ошибка: {type(e).__name__}: {e}",
-                execution_time=execution_time,
-            )
-
-    return wrapper
-
-
-def confirm_action(action_name: str) -> Callable:
-    """
-    Фабрика декораторов для подтверждения действий.
-
-    Args:
-        action_name: Название действия для отображения
-
-    Returns:
-        Декоратор, запрашивающий подтверждение
-    """
-
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(self, *args, **kwargs) -> CommandResult:
-            # Запрашиваем подтверждение у пользователя
-            print(
-                f'⚠️  Вы уверены, что хотите выполнить "{action_name}"? [y/N]: ', end=""
-            )
-            response = input().strip().lower()
-
-            if response != "y":
-                return CommandResult(
-                    success=False,
-                    message=f"Операция '{action_name}' отменена пользователем",
-                    requires_confirmation=True,
-                )
-
-            return func(self, *args, **kwargs)
-
-        return wrapper
-
-    return decorator
-
-
-def log_time(func: Callable) -> Callable:
-    """
-    Декоратор для логирования времени выполнения.
-
-    Измеряет время выполнения и выводит информацию в консоль.
-    """
-
-    @wraps(func)
-    def wrapper(self, *args, **kwargs) -> CommandResult:
-        # Начинаем замер времени
-        start_time = None
-        if hasattr(self, "_start_timer"):
-            self._start_timer()
-        else:
-            start_time = time.monotonic()
-
-        result = func(self, *args, **kwargs)
-
-        # Останавливаем замер времени
-        execution_time = 0.0
-        if hasattr(self, "_stop_timer"):
-            execution_time = self._stop_timer()
-        elif start_time is not None:
-            execution_time = time.monotonic() - start_time
-
-        # Выводим информацию о времени выполнения если операция заняла > 0.01 секунды
-        if execution_time > 0.01:
-            func_name = func.__name__
-            print(
-                f"⏱️  Команда '{func_name}' выполнилась за {execution_time:.3f} секунд"
-            )
-
-        # Добавляем время выполнения в результат
-        if isinstance(result, CommandResult):
-            result.execution_time = execution_time
-
-        return result
-
-    return wrapper
 
 
 # Конкретные реализации команд
@@ -795,7 +701,10 @@ class Table:
 
     def __repr__(self) -> str:
         columns_str = ", ".join(str(col) for col in self.columns)
-        return f"Table(name='{self.name}', columns=[{columns_str}], next_id={self.next_id})"
+        return (
+            f"Table(name='{self.name}', columns=[{columns_str}], "
+            f"next_id={self.next_id})"
+        )
 
 
 class Database:

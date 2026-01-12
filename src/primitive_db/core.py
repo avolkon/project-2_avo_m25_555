@@ -4,11 +4,11 @@
 """
 import json
 import time
+from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-
 
 class InvalidDataTypeError(ValueError):
     """Исключение для неподдерживаемого типа данных."""
@@ -239,6 +239,310 @@ class CachedJsonTableStorage(TableDataStorage):
         """Очищает весь кэш."""
         self._cache.clear()
 
+
+# Исключения для парсера
+class ParseError(ValueError):
+    """Исключение при ошибке парсинга команд."""
+    pass
+
+
+# Классы системы команд
+class CommandResult:
+    """Результат выполнения команды."""
+    
+    def __init__(self, success: bool, message: str, 
+                 data: Optional[dict] = None,
+                 execution_time: float = 0.0,
+                 requires_confirmation: bool = False):
+        """
+        Инициализация результата команды.
+        
+        Args:
+            success: Успешность выполнения
+            message: Сообщение для пользователя
+            data: Данные для кэширования (опционально)
+            execution_time: Время выполнения в секундах
+            requires_confirmation: Требуется ли подтверждение
+        """
+        self.success = success
+        self.message = message
+        self.data = data or {}
+        self.execution_time = execution_time
+        self.requires_confirmation = requires_confirmation
+    
+    def __str__(self) -> str:
+        """Строковое представление результата."""
+        status = "✅ Успешно" if self.success else "❌ Ошибка"
+        time_str = f" ({self.execution_time:.3f}с)" if self.execution_time > 0 else ""
+        return f"{status}: {self.message}{time_str}"
+
+
+class Command(ABC):
+    """Абстрактный класс команды."""
+    
+    def __init__(self, database: 'Database'):
+        """
+        Инициализация команды.
+        
+        Args:
+            database: Экземпляр базы данных
+        """
+        self.database = database
+        self.start_time: Optional[float] = None
+        self.end_time: Optional[float] = None
+    
+    @abstractmethod
+    def execute(self) -> CommandResult:
+        """Выполняет команду и возвращает результат."""
+        pass
+    
+    def _start_timer(self) -> None:
+        """Начинает замер времени выполнения."""
+        self.start_time = time.monotonic()
+    
+    def _stop_timer(self) -> float:
+        """Останавливает таймер и возвращает время выполнения."""
+        if self.start_time is None:
+            return 0.0
+        self.end_time = time.monotonic()
+        return self.end_time - self.start_time
+
+
+# Декораторы для команд
+def handle_db_errors(func: Callable) -> Callable:
+    """
+    Декоратор для обработки ошибок базы данных.
+    
+    Перехватывает стандартные исключения БД и преобразует их
+    в CommandResult с сообщением об ошибке.
+    """
+    @wraps(func)
+    def wrapper(self, *args, **kwargs) -> CommandResult:
+        try:
+            return func(self, *args, **kwargs)
+        except (InvalidDataTypeError, TableAlreadyExistsError, 
+                TableNotFoundError, StorageError, ParseError) as e:
+            # Известные ошибки БД
+            execution_time = self._stop_timer() if hasattr(self, '_stop_timer') else 0.0
+            return CommandResult(
+                success=False,
+                message=str(e),
+                execution_time=execution_time
+            )
+        except Exception as e:
+            # Неизвестные ошибки
+            execution_time = self._stop_timer() if hasattr(self, '_stop_timer') else 0.0
+            return CommandResult(
+                success=False,
+                message=f"Неизвестная ошибка: {type(e).__name__}: {e}",
+                execution_time=execution_time
+            )
+    return wrapper
+
+
+def confirm_action(action_name: str) -> Callable:
+    """
+    Фабрика декораторов для подтверждения действий.
+    
+    Args:
+        action_name: Название действия для отображения
+        
+    Returns:
+        Декоратор, запрашивающий подтверждение
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(self, *args, **kwargs) -> CommandResult:
+            # Запрашиваем подтверждение у пользователя
+            print(f'⚠️  Вы уверены, что хотите выполнить "{action_name}"? [y/N]: ', end='')
+            response = input().strip().lower()
+            
+            if response != 'y':
+                return CommandResult(
+                    success=False,
+                    message=f"Операция '{action_name}' отменена пользователем",
+                    requires_confirmation=True
+                )
+            
+            return func(self, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def log_time(func: Callable) -> Callable:
+    """
+    Декоратор для логирования времени выполнения.
+    
+    Измеряет время выполнения и выводит информацию в консоль.
+    """
+    @wraps(func)
+    def wrapper(self, *args, **kwargs) -> CommandResult:
+        # Начинаем замер времени
+        start_time = None
+        if hasattr(self, '_start_timer'):
+            self._start_timer()
+        else:
+            start_time = time.monotonic()
+        
+        result = func(self, *args, **kwargs)
+        
+        # Останавливаем замер времени
+        execution_time = 0.0
+        if hasattr(self, '_stop_timer'):
+            execution_time = self._stop_timer()
+        elif start_time is not None:
+            execution_time = time.monotonic() - start_time
+        
+        # Выводим информацию о времени выполнения если операция заняла > 0.01 секунды
+        if execution_time > 0.01:
+            func_name = func.__name__
+            print(f"⏱️  Команда '{func_name}' выполнилась за {execution_time:.3f} секунд")
+        
+        # Добавляем время выполнения в результат
+        if isinstance(result, CommandResult):
+            result.execution_time = execution_time
+        
+        return result
+    return wrapper
+
+
+# Конкретные реализации команд
+class CreateTableCommand(Command):
+    """Команда создания таблицы."""
+    
+    def __init__(self, database: Database, table_name: str, columns_def: List[str]):
+        """
+        Инициализация команды создания таблицы.
+        
+        Args:
+            database: Экземпляр базы данных
+            table_name: Имя таблицы
+            columns_def: Список определений столбцов в формате "имя:тип"
+        """
+        super().__init__(database)
+        self.table_name = table_name
+        self.columns_def = columns_def
+    
+    @handle_db_errors
+    @log_time
+    def execute(self) -> CommandResult:
+        """Выполняет создание таблицы."""
+        # Создаем столбцы из определений
+        columns = []
+        for col_def in self.columns_def:
+            if ':' not in col_def:
+                raise ParseError(f"Некорректное определение столбца: {col_def}")
+            
+            name, col_type = col_def.split(':', 1)
+            columns.append(Column(name.strip(), col_type.strip()))
+        
+        # Создаем таблицу
+        table = self.database.create_table(self.table_name, columns)
+        
+        return CommandResult(
+            success=True,
+            message=f'Таблица "{self.table_name}" успешно создана со столбцами: '
+                    f'{", ".join(str(c) for c in table.columns)}',
+            data={"table_name": self.table_name, "columns": columns}
+        )
+
+
+class DropTableCommand(Command):
+    """Команда удаления таблицы."""
+    
+    def __init__(self, database: Database, table_name: str):
+        """
+        Инициализация команды удаления таблицы.
+        
+        Args:
+            database: Экземпляр базы данных
+            table_name: Имя таблицы для удаления
+        """
+        super().__init__(database)
+        self.table_name = table_name
+    
+    @confirm_action("удаление таблицы")
+    @handle_db_errors
+    @log_time
+    def execute(self) -> CommandResult:
+        """Выполняет удаление таблицы."""
+        success = self.database.drop_table(self.table_name)
+        
+        return CommandResult(
+            success=success,
+            message=f'Таблица "{self.table_name}" успешно удалена.',
+            data={"table_name": self.table_name}
+        )
+
+
+class ListTablesCommand(Command):
+    """Команда вывода списка таблиц."""
+    
+    def __init__(self, database: Database):
+        """
+        Инициализация команды вывода списка таблиц.
+        
+        Args:
+            database: Экземпляр базы данных
+        """
+        super().__init__(database)
+    
+    @handle_db_errors
+    @log_time
+    def execute(self) -> CommandResult:
+        """Выполняет вывод списка таблиц."""
+        tables = self.database.list_tables()
+        
+        if not tables:
+            message = "В базе данных нет таблиц."
+        else:
+            table_list = "\n- " + "\n- ".join(tables)
+            message = f"Список таблиц:{table_list}"
+        
+        return CommandResult(
+            success=True,
+            message=message,
+            data={"tables": tables, "count": len(tables)}
+        )
+
+
+class InfoTableCommand(Command):
+    """Команда вывода информации о таблице."""
+    
+    def __init__(self, database: Database, table_name: str):
+        """
+        Инициализация команды вывода информации о таблице.
+        
+        Args:
+            database: Экземпляр базы данных
+            table_name: Имя таблицы
+        """
+        super().__init__(database)
+        self.table_name = table_name
+    
+    @handle_db_errors
+    @log_time
+    def execute(self) -> CommandResult:
+        """Выполняет вывод информации о таблице."""
+        table = self.database.get_table(self.table_name)
+        
+        # Загружаем данные таблицы для подсчета записей
+        data = self.database.data_storage.load(self.table_name)
+        record_count = len(data)
+        
+        columns_str = ", ".join(str(col) for col in table.columns)
+        
+        return CommandResult(
+            success=True,
+            message=f"Таблица: {self.table_name}\n"
+                    f"Столбцы: {columns_str}\n"
+                    f"Количество записей: {record_count}",
+            data={
+                "table_name": self.table_name,
+                "columns": table.columns,
+                "record_count": record_count
+            }
+        )
 
 # Константы для типов данных
 SUPPORTED_TYPES = {"int": int, "str": str, "bool": bool}

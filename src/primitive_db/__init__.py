@@ -24,7 +24,17 @@ from .core import (
     MetadataStorage,
     TableDataStorage,
     JsonMetadataStorage,
-    CachedJsonTableStorage
+    CachedJsonTableStorage,
+    ParseError,
+    CommandResult,
+    Command,
+    CreateTableCommand,
+    DropTableCommand,
+    ListTablesCommand,
+    InfoTableCommand,
+    handle_db_errors,
+    confirm_action,
+    log_time
 )
 
 __all__ = [
@@ -39,7 +49,17 @@ __all__ = [
     'MetadataStorage',
     'TableDataStorage',
     'JsonMetadataStorage',
-    'CachedJsonTableStorage'
+    'CachedJsonTableStorage',
+    'ParseError',
+    'CommandResult',
+    'Command',
+    'CreateTableCommand',
+    'DropTableCommand',
+    'ListTablesCommand',
+    'InfoTableCommand',
+    'handle_db_errors',
+    'confirm_action',
+    'log_time'
 ]
 
 __version__ = '0.1.0'

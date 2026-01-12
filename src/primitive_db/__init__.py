@@ -1,17 +1,37 @@
-'''project-2_avo_m25_555_src_primitive_db.__init__.py'''
+"""
+Primitive Database - простая база данных на Python.
 
-from .core import create_table, drop_table, list_tables
-from .engine import run
-from .main import main
-from .utils import ensure_data_dirs, load_metadata, save_metadata
+Основные классы:
+- Database: Основной класс базы данных
+- Table: Представление таблицы
+- Column: Столбец таблицы с типом данных
+- Row: Строка данных таблицы
+
+Исключения:
+- InvalidDataTypeError: Неподдерживаемый тип данных
+- TableAlreadyExistsError: Таблица уже существует
+- TableNotFoundError: Таблица не найдена
+"""
+from .core import (
+    Database,
+    Table,
+    Column,
+    Row,
+    InvalidDataTypeError,
+    TableAlreadyExistsError,
+    TableNotFoundError
+)
 
 __all__ = [
-    "create_table",
-    "drop_table",
-    "ensure_data_dirs",
-    "list_tables",
-    "load_metadata",
-    "main",
-    "run",
-    "save_metadata",
+    'Database',
+    'Table',
+    'Column',
+    'Row',
+    'InvalidDataTypeError',
+    'TableAlreadyExistsError',
+    'TableNotFoundError'
 ]
+
+__version__ = '0.1.0'
+__author__ = 'Primitive DB Team'
+

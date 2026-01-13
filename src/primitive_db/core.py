@@ -9,7 +9,7 @@ import json
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union, Tuple
 
 # Импортируем декораторы из нового модуля
 try:
@@ -618,6 +618,11 @@ class Table:
         # Создаем индекс для быстрого доступа к столбцам
         self._column_index = {col.name: col for col in self.columns}
 
+        # Ссылка на хранилище данных (будет установлена Database)
+        self._data_storage: Optional[CachedJsonTableStorage] = None
+        # Ссылка на родительскую базу данных для сохранения метаданных
+        self._database_ref: Optional[Database] = None
+
     @property
     def column_names(self) -> List[str]:
         """Возвращает список имен столбцов."""
@@ -698,13 +703,273 @@ class Table:
         columns = [Column.from_dict(col_data) for col_data in data["columns"]]
         next_id = data.get("next_id", 1)
         return cls(name, columns, next_id)
-
+    
     def __repr__(self) -> str:
         columns_str = ", ".join(str(col) for col in self.columns)
         return (
             f"Table(name='{self.name}', columns=[{columns_str}], "
             f"next_id={self.next_id})"
         )
+
+    def set_data_storage(self, data_storage: CachedJsonTableStorage, 
+                        database_ref: Optional[Database] = None) -> None:
+        """
+        Устанавливает хранилище данных для таблицы.
+        Args:
+            data_storage: Экземпляр хранилища данных
+            database_ref: Ссылка на родительскую базу данных
+        """
+        self._data_storage = data_storage
+        self._database_ref = database_ref
+
+    def insert(self, values: List[Any]) -> int:
+        """
+        Вставляет новую запись в таблицу.
+        
+        Args:
+            values: Список значений для вставки (без ID)
+            
+        Returns:
+            ID вставленной записи
+            
+        Raises:
+            ValueError: При ошибке валидации данных
+            RuntimeError: Если хранилище данных не установлено
+        """
+        # Проверяем наличие хранилища данных
+        if not self._data_storage:
+            raise RuntimeError("Хранилище данных не установлено для таблицы")
+        
+        # Валидируем данные и создаем словарь строки
+        row_data = self.validate_row_data(values)
+        row_id = row_data[self._id_column]
+        
+        # Загружаем текущие данные таблицы
+        current_data = self._data_storage.load(self.name)
+        
+        # Добавляем новую запись
+        current_data.append(row_data)
+        
+        # Сохраняем обновленные данные
+        self._data_storage.save(self.name, current_data)
+        
+        # Увеличиваем next_id для следующей вставки
+        self.next_id += 1
+        
+        # Сохраняем метаданные таблицы
+        self._save_metadata()
+        
+        return row_id
+
+    def select(self, conditions: Optional[Dict[str, Dict[str, Any]]] = None) -> List[Row]:
+        """
+        Выбирает записи по условиям.
+        
+        Args:
+            conditions: Словарь условий в формате 
+                       {"column": {"operator": "=", "value": value}}
+            
+        Returns:
+            Список объектов Row, удовлетворяющих условиям
+        """
+        # Проверяем наличие хранилища данных
+        if not self._data_storage:
+            raise RuntimeError("Хранилище данных не установлено для таблицы")
+        
+        # Загружаем данные таблицы
+        data = self._data_storage.load(self.name)
+        
+        # Фильтруем данные по условиям
+        if conditions:
+            filtered_data = []
+            for record in data:
+                if self._matches_conditions(record, conditions):
+                    filtered_data.append(record)
+            data = filtered_data
+        
+        # Преобразуем данные в объекты Row
+        rows = []
+        for record in data:
+            rows.append(Row(record, self.columns))
+            
+        return rows
+
+    def update(self, set_clause: Dict[str, Any], 
+               where_clause: Optional[Dict[str, Dict[str, Any]]] = None) -> int:
+        """
+        Обновляет записи в таблице.
+        
+        Args:
+            set_clause: Словарь с данными для обновления {"column": new_value}
+            where_clause: Условия для фильтрации записей
+            
+        Returns:
+            Количество обновленных записей
+        """
+        # Проверяем наличие хранилища данных
+        if not self._data_storage:
+            raise RuntimeError("Хранилище данных не установлено для таблицы")
+        
+        # Загружаем данные таблицы
+        data = self._data_storage.load(self.name)
+        updated_count = 0
+        
+        # Обновляем записи
+        for i, record in enumerate(data):
+            # Проверяем условия WHERE
+            if where_clause and not self._matches_conditions(record, where_clause):
+                continue
+                
+            # Обновляем поля согласно SET
+            for column_name, new_value in set_clause.items():
+                # Валидируем тип данных
+                if column_name in self._column_index:
+                    column = self._column_index[column_name]
+                    expected_type = SUPPORTED_TYPES[column.data_type]
+                    
+                    # Преобразуем значение к нужному типу
+                    try:
+                        if expected_type == bool and isinstance(new_value, str):
+                            new_value = new_value.lower() in ("true", "1", "yes")
+                        elif expected_type == int and isinstance(new_value, str):
+                            new_value = int(new_value)
+                        elif expected_type == str:
+                            new_value = str(new_value)
+                            
+                        record[column_name] = new_value
+                    except (ValueError, TypeError) as e:
+                        raise ValueError(
+                            f"Ошибка преобразования '{new_value}' в тип "
+                            f"{column.data_type} для столбца '{column_name}': {e}"
+                        )
+            
+            updated_count += 1
+            data[i] = record  # Обновляем запись в списке
+        
+        # Сохраняем обновленные данные, если были изменения
+        if updated_count > 0:
+            self._data_storage.save(self.name, data)
+            
+        return updated_count
+
+    def delete(self, where_clause: Optional[Dict[str, Dict[str, Any]]] = None) -> int:
+        """
+        Удаляет записи из таблицы.
+        
+        Args:
+            where_clause: Условия для фильтрации записей
+            
+        Returns:
+            Количество удаленных записей
+        """
+        # Проверяем наличие хранилища данных
+        if not self._data_storage:
+            raise RuntimeError("Хранилище данных не установлено для таблицы")
+        
+        # Загружаем данные таблицы
+        data = self._data_storage.load(self.name)
+        
+        # Фильтруем записи для удаления
+        if where_clause:
+            filtered_data = [
+                record for record in data 
+                if not self._matches_conditions(record, where_clause)
+            ]
+        else:
+            # Если условия нет, удаляем все записи
+            filtered_data = []
+        
+        # Подсчитываем количество удаленных записей
+        deleted_count = len(data) - len(filtered_data)
+        
+        # Сохраняем отфильтрованные данные, если были удаления
+        if deleted_count > 0:
+            self._data_storage.save(self.name, filtered_data)
+            
+        return deleted_count
+
+    def _matches_conditions(self, record: Dict[str, Any], 
+                           conditions: Dict[str, Dict[str, Any]]) -> bool:
+        """
+        Проверяет, удовлетворяет ли запись всем условиям.
+        
+        Args:
+            record: Словарь с данными записи
+            conditions: Словарь условий
+            
+        Returns:
+            True если запись удовлетворяет всем условиям
+        """
+        for column_name, condition in conditions.items():
+            operator = condition.get("operator", "=")
+            expected_value = condition.get("value")
+            
+            # Проверяем наличие столбца в записи
+            if column_name not in record:
+                return False
+                
+            actual_value = record[column_name]
+            
+            # Сравниваем значения по оператору
+            if not self._compare_values(actual_value, operator, expected_value):
+                return False
+                
+        return True
+
+    def _compare_values(self, actual: Any, operator: str, expected: Any) -> bool:
+        """
+        Сравнивает значения по заданному оператору.
+        
+        Args:
+            actual: Фактическое значение
+            operator: Оператор сравнения (=, !=, <, >, <=, >=)
+            expected: Ожидаемое значение
+            
+        Returns:
+            Результат сравнения
+        """
+        operators = {
+            "=": lambda a, b: a == b,
+            "!=": lambda a, b: a != b,
+            "<": lambda a, b: a < b,
+            ">": lambda a, b: a > b,
+            "<=": lambda a, b: a <= b,
+            ">=": lambda a, b: a >= b,
+        }
+        
+        if operator not in operators:
+            raise ValueError(f"Неподдерживаемый оператор: {operator}")
+            
+        return operators[operator](actual, expected)
+    
+    def _save_metadata(self) -> None:
+        """
+        Сохраняет метаданные таблицы.
+        Обновляет next_id в родительской базе данных.
+        """
+        if self._database_ref:
+            try:
+                # Обновляем метаданные таблицы в базе данных
+                self._database_ref.tables[self.name] = self
+                # Вызываем сохранение метаданных
+                if hasattr(self._database_ref, '_save_metadata'):
+                    self._database_ref._save_metadata()
+            except (AttributeError, KeyError):
+                # Если не удалось сохранить, игнорируем
+                pass
+
+    def _save_table_metadata(self) -> None:
+        """
+        Сохраняет метаданные таблицы (next_id).
+        Вызывается после изменения таблицы (insert, update, delete).
+        """
+        if self._database_ref and hasattr(self._database_ref, '_save_metadata'):
+            # Вызываем сохранение метаданных через базу данных
+            self._database_ref._save_metadata()
+        else:
+            # Если ссылки на базу данных нет, просто увеличиваем next_id
+            # Метаданные будут сохранены при следующем вызове из Database
+            pass
 
 
 class Database:
@@ -722,6 +987,10 @@ class Database:
         self.data_storage = data_storage or CachedJsonTableStorage()
         self.tables: Dict[str, Table] = {}
         self._load_metadata()
+                # Устанавливаем хранилища данных для загруженных таблиц
+        for table_name, table in self.tables.items():
+            if self.data_storage:
+                table.set_data_storage(self.data_storage, self)
 
     def _load_metadata(self) -> None:
         """Загружает метаданные из хранилища."""
@@ -741,14 +1010,11 @@ class Database:
     def create_table(self, name: str, columns: List[Column]) -> Table:
         """
         Создает новую таблицу.
-
         Args:
             name: Имя таблицы
             columns: Список столбцов
-
         Returns:
             Созданная таблица
-
         Raises:
             TableAlreadyExistsError: Если таблица уже существует
         """
@@ -759,6 +1025,11 @@ class Database:
         self.tables[name] = table
 
         # TODO: Сохранение метаданных будет реализовано позже
+        # Устанавливаем хранилище данных и ссылку на базу данных
+        if self.data_storage:
+            table.set_data_storage(self.data_storage, self)
+
+        # Сохраняем метаданные
         if self.metadata_storage:
             self._save_metadata()
 
@@ -810,7 +1081,11 @@ class Database:
         return list(self.tables.keys())
 
     def _save_metadata(self) -> bool:
-        """Сохраняет метаданные в хранилище."""
+        """
+        Сохраняет метаданные в хранилище.
+        Returns:
+            True если успешно, False если ошибка
+        """
         try:
             metadata = {
                 "tables": {name: table.to_dict() for name, table in self.tables.items()}
@@ -820,6 +1095,190 @@ class Database:
             print(f"❌ Ошибка сохранения метаданных: {e}")
             return False
 
+    def update_table_metadata(self, table_name: str) -> bool:
+        """
+        Обновляет метаданные таблицы в хранилище.
+        
+        Args:
+            table_name: Имя таблицы для обновления
+            
+        Returns:
+            True если успешно
+            
+        Raises:
+            TableNotFoundError: Если таблица не существует
+        """
+        if table_name not in self.tables:
+            raise TableNotFoundError(f"Таблица '{table_name}' не найдена")
+            
+        return self._save_metadata()        
+
     def __repr__(self) -> str:
         tables_count = len(self.tables)
         return f"Database(tables={tables_count})"
+class InsertCommand(Command):
+    """Команда вставки данных в таблицу."""
+
+    def __init__(self, database: Database, table_name: str, values: List[Any]):
+        """
+        Инициализация команды вставки.
+
+        Args:
+            database: Экземпляр базы данных
+            table_name: Имя таблицы
+            values: Список значений для вставки
+        """
+        super().__init__(database)
+        self.table_name = table_name
+        self.values = values
+
+    @handle_db_errors
+    @log_time
+    def execute(self) -> CommandResult:
+        """Выполняет вставку данных в таблицу."""
+        # Получаем таблицу
+        table = self.database.get_table(self.table_name)
+        
+        # Вставляем данные
+        inserted_id = table.insert(self.values)
+        
+        return CommandResult(
+            success=True,
+            message=f'Запись с ID={inserted_id} успешно добавлена '
+                    f'в таблицу "{self.table_name}".',
+            data={
+                "table_name": self.table_name,
+                "inserted_id": inserted_id,
+                "values": self.values,
+            },
+        )
+
+
+class SelectCommand(Command):
+    """Команда выборки данных из таблицы."""
+
+    def __init__(self, database: Database, table_name: str, 
+                 conditions: Optional[Dict[str, Dict[str, Any]]] = None):
+        """
+        Инициализация команды выборки.
+
+        Args:
+            database: Экземпляр базы данных
+            table_name: Имя таблицы
+            conditions: Условия выборки
+        """
+        super().__init__(database)
+        self.table_name = table_name
+        self.conditions = conditions
+
+    @handle_db_errors
+    @log_time
+    def execute(self) -> CommandResult:
+        """Выполняет выборку данных из таблицы."""
+        # Получаем таблицу
+        table = self.database.get_table(self.table_name)
+        
+        # Выполняем выборку
+        rows = table.select(self.conditions)
+        
+        # Подготавливаем данные для вывода
+        if rows:
+            # Преобразуем строки в список словарей
+            data = [row.to_dict() for row in rows]
+            message = f"Найдено {len(rows)} записей в таблице '{self.table_name}'"
+        else:
+            data = []
+            message = f"В таблице '{self.table_name}' не найдено записей"
+            
+        return CommandResult(
+            success=True,
+            message=message,
+            data={
+                "table_name": self.table_name,
+                "rows": data,
+                "count": len(rows),
+                "conditions": self.conditions,
+            },
+        )
+
+
+class UpdateCommand(Command):
+    """Команда обновления данных в таблице."""
+
+    def __init__(self, database: Database, table_name: str, 
+                 set_clause: Dict[str, Any], 
+                 where_clause: Optional[Dict[str, Dict[str, Any]]] = None):
+        """
+        Инициализация команды обновления.
+
+        Args:
+            database: Экземпляр базы данных
+            table_name: Имя таблицы
+            set_clause: Данные для обновления
+            where_clause: Условия обновления
+        """
+        super().__init__(database)
+        self.table_name = table_name
+        self.set_clause = set_clause
+        self.where_clause = where_clause
+
+    @handle_db_errors
+    @log_time
+    def execute(self) -> CommandResult:
+        """Выполняет обновление данных в таблице."""
+        # Получаем таблицу
+        table = self.database.get_table(self.table_name)
+        
+        # Обновляем данные
+        updated_count = table.update(self.set_clause, self.where_clause)
+        
+        return CommandResult(
+            success=True,
+            message=f'Обновлено {updated_count} записей в таблице "{self.table_name}".',
+            data={
+                "table_name": self.table_name,
+                "updated_count": updated_count,
+                "set_clause": self.set_clause,
+                "where_clause": self.where_clause,
+            },
+        )
+
+
+class DeleteCommand(Command):
+    """Команда удаления данных из таблицы."""
+
+    def __init__(self, database: Database, table_name: str, 
+                 where_clause: Optional[Dict[str, Dict[str, Any]]] = None):
+        """
+        Инициализация команды удаления.
+
+        Args:
+            database: Экземпляр базы данных
+            table_name: Имя таблицы
+            where_clause: Условия удаления
+        """
+        super().__init__(database)
+        self.table_name = table_name
+        self.where_clause = where_clause
+
+    @confirm_action("удаление данных")
+    @handle_db_errors
+    @log_time
+    def execute(self) -> CommandResult:
+        """Выполняет удаление данных из таблицы."""
+        # Получаем таблицу
+        table = self.database.get_table(self.table_name)
+        
+        # Удаляем данные
+        deleted_count = table.delete(self.where_clause)
+        
+        return CommandResult(
+            success=True,
+            message=f'Удалено {deleted_count} записей из таблицы "{self.table_name}".',
+            data={
+                "table_name": self.table_name,
+                "deleted_count": deleted_count,
+                "where_clause": self.where_clause,
+            },
+        )
+    

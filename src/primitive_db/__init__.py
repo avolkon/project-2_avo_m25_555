@@ -80,6 +80,12 @@ __all__ = [
     "confirm_action",
     "log_time",
     "create_cacher",
+    "InsertCommand",
+    "SelectCommand",
+    "UpdateCommand",
+    "DeleteCommand",
+    "HelpCommand",
+    "ExitCommand",
 ]
 
 __version__ = "0.1.0"

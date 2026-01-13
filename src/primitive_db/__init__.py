@@ -70,22 +70,16 @@ __all__ = [
     "CommandParser",
     "ValueParser",
     "ConditionParser",
-    "InsertCommand",
-    "SelectCommand",
-    "UpdateCommand",
-    "DeleteCommand",
-    "HelpCommand",
-    "ExitCommand",
+    "InsertCommand",  # Должен быть импортирован
+    "SelectCommand",  # Должен быть импортирован
+    "UpdateCommand",  # Должен быть импортирован
+    "DeleteCommand",  # Должен быть импортирован
+    "HelpCommand",  # Должен быть импортирован
+    "ExitCommand",  # Должен быть импортирован
     "handle_db_errors",
     "confirm_action",
     "log_time",
     "create_cacher",
-    "InsertCommand",
-    "SelectCommand",
-    "UpdateCommand",
-    "DeleteCommand",
-    "HelpCommand",
-    "ExitCommand",
 ]
 
 __version__ = "0.1.0"

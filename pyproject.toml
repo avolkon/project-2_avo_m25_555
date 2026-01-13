@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "project#2_avo_m25_555"
 version = "0.1.0"
-description = "Primitive console database application for FinTech learning project"
-authors = ["Your Name <your.email@example.com>"]
+description = "Primitive console database application"
+authors = ["Anastasiia Volkonskaia <aavolkon@mail.ru>"]
 readme = "README.md"
 packages = [
     { include = "src" },

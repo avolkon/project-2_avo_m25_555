@@ -19,9 +19,6 @@ lint:
 fix:
 	poetry run ruff check --fix .
 
-fixu:
-	poetry run ruff check --unsafe-fixes .
-
 format:
 	poetry run ruff format .
 
